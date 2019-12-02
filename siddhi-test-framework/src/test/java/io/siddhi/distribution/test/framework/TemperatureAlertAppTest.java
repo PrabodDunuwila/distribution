@@ -112,7 +112,7 @@ public class TemperatureAlertAppTest {
         envMap.put("USERNAME", mySQLContainer.getUsername());
         envMap.put("PASSWORD", mySQLContainer.getPassword());
         envMap.put("JDBC_DRIVER_NAME", mySQLContainer.getDriverClassName());
-        siddhiRunnerContainer = new SiddhiRunnerContainer()
+        siddhiRunnerContainer = new SiddhiRunnerContainer("siddhiio/siddhi-runner-alpine:latest-dev")
                 .withSiddhiApps(appUrl.getPath())
                 .withJars(extraJarsUrl.getPath())
                 .withJars(jarsFromMaven.toString())

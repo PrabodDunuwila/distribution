@@ -1,5 +1,4 @@
-wso2.datasources:
-  dataSources:
+dataSources:
   - name: TemperatureDB
     description: The datasource used for testing
     definition:
@@ -13,4 +12,4 @@ wso2.datasources:
         idleTimeout: 60000
         connectionTestQuery: SELECT 1
         validationTimeout: 30000
-        isAutoCommit: false 
+        isAutoCommit: false

@@ -30,6 +30,7 @@ import java.net.ConnectException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -120,8 +121,13 @@ public class SiddhiRunnerContainer extends GenericContainer<SiddhiRunnerContaine
      * @return self
      */
     public SiddhiRunnerContainer withConfig(String confPath) {
-        withFileSystemBind(confPath, CONF_DIRECTORY, BindMode.READ_ONLY);
-        initCommand.append(BLANK_SPACE).append(OVERRIDE_CONF_SYSTEM_PARAMETER).append("=").append(CONF_DIRECTORY);
+        int mountMode = 444;
+        Path path = Paths.get(confPath);
+        MountableFile mountableFile = MountableFile.forHostPath(confPath,
+                mountMode);
+        withCopyFileToContainer(mountableFile, CONF_DIRECTORY);
+        initCommand.append(BLANK_SPACE).append(OVERRIDE_CONF_SYSTEM_PARAMETER).append("=")
+                .append(CONF_DIRECTORY).append(File.separator).append(path.getFileName());
         return this;
     }
 
