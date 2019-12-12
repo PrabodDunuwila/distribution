@@ -15,17 +15,17 @@ public class LoggerServiceContainer extends GenericContainer<LoggerServiceContai
     private static final int DEFAULT_LOGSERVICE_PORT = 8080;
     private int startupTimeoutSeconds = 120;
 
-    public LoggerServiceContainer(){
+    public LoggerServiceContainer() {
         super(IMAGE_NAME + ":" + DEFAULT_LOGSERVICE_VERSION);
         withExposedPorts(DEFAULT_LOGSERVICE_PORT);
     }
 
     public String getNetworkedUrl() {
-        return "http://" + getNetworkAliases().get(0) + ":" + DEFAULT_LOGSERVICE_PORT+"/logger";
+        return "http://" + getNetworkAliases().get(0) + ":" + DEFAULT_LOGSERVICE_PORT + "/logger";
     }
 
     public String getUrl() {
-        return "http://" + getContainerIpAddress() + ":" + getMappedPort(DEFAULT_LOGSERVICE_PORT)+"/logger";
+        return "http://" + getContainerIpAddress() + ":" + getMappedPort(DEFAULT_LOGSERVICE_PORT) + "/logger";
     }
 
     int getStartupTimeoutSeconds() {
