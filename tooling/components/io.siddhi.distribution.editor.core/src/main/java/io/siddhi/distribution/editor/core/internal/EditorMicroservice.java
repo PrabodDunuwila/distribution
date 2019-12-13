@@ -53,6 +53,7 @@ import io.siddhi.distribution.editor.core.exception.KubernetesGenerationExceptio
 import io.siddhi.distribution.editor.core.exception.SiddhiAppDeployerServiceStubException;
 import io.siddhi.distribution.editor.core.exception.SiddhiStoreQueryHelperException;
 import io.siddhi.distribution.editor.core.internal.local.LocalFSWorkspace;
+import io.siddhi.distribution.editor.core.model.SiddhiAppStatus;
 import io.siddhi.distribution.editor.core.util.Constants;
 import io.siddhi.distribution.editor.core.util.DebugCallbackEvent;
 import io.siddhi.distribution.editor.core.util.DebugStateHolder;
@@ -236,7 +237,7 @@ public class EditorMicroservice implements Microservice {
                         EditorDataHolder.getSiddhiManager().createSiddhiAppRuntime(siddhiApp);
                 String siddhiAppName = siddhiAppRuntime.getName();
                 DebugRuntime debugRuntime = EditorDataHolder.getSiddhiAppMap().get(siddhiAppName);
-                if (debugRuntime != null) {
+                if (debugRuntime != null && debugRuntime.getMode() != DebugRuntime.Mode.RUN) {
                     debugRuntime.setSiddhiAppRuntime(siddhiAppRuntime);
                     debugRuntime.setMode(DebugRuntime.Mode.STOP);
                     EditorDataHolder.getSiddhiAppMap().put(siddhiAppName, debugRuntime);
@@ -636,15 +637,8 @@ public class EditorMicroservice implements Microservice {
                     Paths.get(Constants.DIRECTORY_WORKSPACE + System.getProperty(FILE_SEPARATOR) +
                             new String(base64ConfigName, Charset.defaultCharset())));
             Files.write(filePath, base64Config);
-            java.nio.file.Path fileNamePath = filePath.getFileName();
-            if (null != fileNamePath) {
-                String siddhiAppName = fileNamePath.toString().replace(Constants.SIDDHI_APP_FILE_EXTENSION, "");
-                if (null != EditorDataHolder.getDebugProcessorService().getSiddhiAppRuntimeHolder(siddhiAppName)) {
-                    //making the app faulty until the file gets deployed again for editor usage purposes
-                    EditorDataHolder.getDebugProcessorService().getSiddhiAppRuntimeHolder(siddhiAppName).setMode(
-                            DebugRuntime.Mode.FAULTY);
-                }
-            }
+            WorkspaceDeployer.deployConfigFile(new String(base64ConfigName, Charset.defaultCharset()),
+                    new String(base64Config, Charset.defaultCharset()));
             JsonObject entity = new JsonObject();
             entity.addProperty(STATUS, SUCCESS);
             entity.addProperty("path", Constants.DIRECTORY_WORKSPACE);
@@ -718,6 +712,7 @@ public class EditorMicroservice implements Microservice {
                 entity.addProperty(STATUS, SUCCESS);
                 entity.addProperty("path", Constants.DIRECTORY_WORKSPACE);
                 entity.addProperty("message", "Siddi App: " + siddhiAppName + " is deleted");
+                WorkspaceDeployer.unDeployConfigFile(siddhiAppName);
                 return Response.status(Response.Status.OK).entity(entity)
                         .type(MediaType.APPLICATION_JSON).build();
             } else {
@@ -1009,14 +1004,40 @@ public class EditorMicroservice implements Microservice {
     @GET
     @Produces(MediaType.APPLICATION_JSON)
     @Path("/artifact/listSiddhiApps")
-    public Response getSiddhiApps() {
+    public Response getSiddhiApps(@QueryParam("envVar") String encodedEnvVar) {
+
+        if (encodedEnvVar != null) {
+            try {
+                String envVarJson = new String(Base64.getDecoder().decode(encodedEnvVar), StandardCharsets.UTF_8);
+                Gson gson = DeserializersRegisterer.getGsonBuilder().disableHtmlEscaping().create();
+                HashMap<String, String> envVariables = gson.fromJson(envVarJson, HashMap.class);
+                if (!envVariables.isEmpty()) {
+                    EditorDataHolder.getSiddhiAppMap().forEach((siddhiAppName, debugRuntime) -> {
+                        String populatedSiddhiApp = SourceEditorUtils.populateSiddhiAppWithVars(envVariables,
+                                debugRuntime.getSiddhiApp());
+                        SiddhiAppRuntime siddhiAppRuntime =
+                                EditorDataHolder.getSiddhiManager().createSiddhiAppRuntime(populatedSiddhiApp);
+                        if (debugRuntime.getMode() != DebugRuntime.Mode.RUN) {
+                            debugRuntime.setSiddhiAppRuntime(siddhiAppRuntime);
+                            debugRuntime.setMode(DebugRuntime.Mode.STOP);
+                            EditorDataHolder.getSiddhiAppMap().put(siddhiAppName, debugRuntime);
+                        }
+                    });
+                }
+            } catch (Throwable ignored) {
+                // If error in json syntax, return siddhi app list without populating
+            }
+        }
+
+        List<SiddhiAppStatus> siddhiAppStatusList = EditorDataHolder.getSiddhiAppMap().values().stream()
+                .map((runtime -> new SiddhiAppStatus(runtime.getSiddhiAppName(), runtime.getMode().toString())))
+                .collect(Collectors.toList());
 
         return Response
                 .status(Response.Status.OK)
                 .header("Access-Control-Allow-Origin", "*")
-                .entity(
-                        new ArrayList<>(EditorDataHolder.getSiddhiAppMap().values())
-                ).build();
+                .entity(siddhiAppStatusList)
+                .build();
     }
 
     @GET
@@ -1182,11 +1203,10 @@ public class EditorMicroservice implements Microservice {
             ExportAppsRequest exportAppsRequest = new Gson().fromJson(payload, ExportAppsRequest.class);
             ExportUtils exportUtils = new ExportUtils(configProvider, exportAppsRequest, exportType);
             File zipFile = exportUtils.createZipFile();
-            String fileName = "siddhi-docker.zip";
+            String fileName = exportUtils.getZipFileName();
             boolean kubernetesEnabled = false;
             if (exportType != null) {
                 if (exportType.equals(EXPORT_TYPE_KUBERNETES)) {
-                    fileName = "siddhi-kubernetes.zip";
                     kubernetesEnabled = true;
                 }
             }
@@ -1199,7 +1219,9 @@ public class EditorMicroservice implements Microservice {
                         .build();
             }
             DockerBuilderStatus dockerBuilderStatus = new DockerBuilderStatus("", "");
-            if (exportAppsRequest != null && exportAppsRequest.getDockerConfiguration() != null) {
+            if (exportAppsRequest != null && exportAppsRequest.getDockerConfiguration() != null &&
+                    exportAppsRequest.getDockerConfiguration().isPushDocker()) {
+
                 DockerBuildConfig dockerBuildConfig = exportAppsRequest.getDockerConfiguration();
                 if ((StringUtils.isEmpty(dockerBuildConfig.getImageName())) ||
                         (StringUtils.isEmpty(dockerBuildConfig.getUserName())) ||
@@ -1208,6 +1230,16 @@ public class EditorMicroservice implements Microservice {
                 ) {
                     errorMessage = "Missing required Docker build configuration " +
                             "of (DockerImageName|UserName|Email|Password)";
+                    log.error(errorMessage);
+                    return Response
+                            .status(Response.Status.BAD_REQUEST)
+                            .entity(errorMessage)
+                            .build();
+                }
+                if (!dockerBuildConfig.getImageName().equals(dockerBuildConfig.getImageName().toLowerCase())) {
+                    errorMessage = "Invalid docker image name " +
+                            dockerBuildConfig.getImageName() +
+                            ". Docker image name must be in lowercase.";
                     log.error(errorMessage);
                     return Response
                             .status(Response.Status.BAD_REQUEST)
@@ -1302,34 +1334,6 @@ public class EditorMicroservice implements Microservice {
                 .entity(dockerBuilderStatus)
                 .type(MediaType.APPLICATION_JSON)
                 .build();
-    }
-
-    /**
-     * Export given Siddhi apps and other configurations to docker or kubernetes artifacts.
-     *
-     * @return Docker or Kubernetes artifacts
-     */
-    @GET
-    @Path("/deploymentConfigs")
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response getDeploymentConfigs() {
-        ExportUtils exportUtils = new ExportUtils(configProvider);
-        try {
-            JsonObject deploymentHolder = new JsonObject();
-            deploymentHolder.addProperty("deploymentYaml", exportUtils.exportConfigs());
-            return Response
-                    .status(Response.Status.OK)
-                    .entity(deploymentHolder)
-                    .type(MediaType.APPLICATION_JSON)
-                    .build();
-        } catch (IOException e) {
-            log.error("Cannot read deployment.yaml file. ", e);
-            return Response
-                    .status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity("Cannot read deployment.yaml file in TOOLING|RUNNER configuration. " +
-                            e.getMessage())
-                    .build();
-        }
     }
 
     /**

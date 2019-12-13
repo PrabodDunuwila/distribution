@@ -51,9 +51,11 @@ import org.wso2.transport.http.netty.contract.config.TransportsConfiguration;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.ws.rs.Consumes;
@@ -101,38 +103,37 @@ public class SiddhiParserApi {
             List<DeployableSiddhiApp> deployableSiddhiApps = new ArrayList<>();
             List<String> userGivenApps = populateAppWithEnvs(request.getPropertyMap(), request.getSiddhiApps());
             for (String app : userGivenApps) {
-                List<SourceDeploymentConfig> sourceDeploymentConfigs = getSourceDeploymentConfigs(app);
-                SiddhiTopology topology = siddhiTopologyCreator.createTopology(app);
-                boolean isAppStateful = topology.isStatefulApp();
+                Set<SourceDeploymentConfig> sourceDeploymentConfigs = getSourceDeploymentConfigs(app);
                 MessagingSystem messagingSystemConfig = request.getMessagingSystem();
 
                 if (messagingSystemConfig != null && !messagingSystemConfig.isEmpty()) {
+                    SiddhiTopology topology = siddhiTopologyCreator.createTopology(app);
+                    boolean isAppStateful = topology.isStatefulApp();
                     List<DeployableSiddhiQueryGroup> queryGroupList = appCreator.createApps(topology,
                             messagingSystemConfig);
-
-                    for (DeployableSiddhiQueryGroup deployableSiddhiQueryGroup : queryGroupList) {
-                        if (deployableSiddhiQueryGroup.isReceiverQueryGroup()) {
-                            for (SiddhiQuery siddhiQuery : deployableSiddhiQueryGroup.getSiddhiQueries()) {
-                                deployableSiddhiApps.add(new DeployableSiddhiApp(siddhiQuery.getApp(),
-                                        sourceDeploymentConfigs, topology.isUserGiveSourceStateful()));
-                            }
-                        } else {
-                            for (SiddhiQuery siddhiQuery : deployableSiddhiQueryGroup.getSiddhiQueries()) {
-                                DeployableSiddhiApp deployableSiddhiApp = new DeployableSiddhiApp(siddhiQuery.getApp(),
-                                        isAppStateful);
-                                if (deployableSiddhiQueryGroup.isUserGivenSource()) {
-                                    deployableSiddhiApp.setSourceDeploymentConfigs(sourceDeploymentConfigs);
+                    if (!queryGroupList.isEmpty()) {
+                        for (DeployableSiddhiQueryGroup deployableSiddhiQueryGroup : queryGroupList) {
+                            if (deployableSiddhiQueryGroup.isReceiverQueryGroup()) {
+                                for (SiddhiQuery siddhiQuery : deployableSiddhiQueryGroup.getSiddhiQueries()) {
+                                    deployableSiddhiApps.add(new DeployableSiddhiApp(siddhiQuery.getApp(),
+                                            sourceDeploymentConfigs, topology.isUserGiveSourceStateful()));
                                 }
-                                deployableSiddhiApps.add(deployableSiddhiApp);
+                            } else {
+                                for (SiddhiQuery siddhiQuery : deployableSiddhiQueryGroup.getSiddhiQueries()) {
+                                    DeployableSiddhiApp deployableSiddhiApp
+                                            = new DeployableSiddhiApp(siddhiQuery.getApp(), isAppStateful);
+                                    if (deployableSiddhiQueryGroup.isUserGivenSource()) {
+                                        deployableSiddhiApp.setSourceDeploymentConfigs(sourceDeploymentConfigs);
+                                    }
+                                    deployableSiddhiApps.add(deployableSiddhiApp);
+                                }
                             }
                         }
+                    } else {
+                        deployableSiddhiApps.add(createStandaloneDeployableApp(app, sourceDeploymentConfigs));
                     }
                 } else {
-                    DeployableSiddhiApp deployableSiddhiApp = new DeployableSiddhiApp(app, isAppStateful);
-                    if (sourceDeploymentConfigs != null && sourceDeploymentConfigs.size() != 0) {
-                        deployableSiddhiApp.setSourceDeploymentConfigs(sourceDeploymentConfigs);
-                    }
-                    deployableSiddhiApps.add(deployableSiddhiApp);
+                    deployableSiddhiApps.add(createStandaloneDeployableApp(app, sourceDeploymentConfigs));
                 }
             }
             return Response.ok().entity(deployableSiddhiApps).build();
@@ -142,6 +143,16 @@ public class SiddhiParserApi {
                     .entity(new ApiResponseMessage(ApiResponseMessage.ERROR,
                             "Exception caught while parsing the app. " + e.getMessage())).build();
         }
+    }
+
+    private DeployableSiddhiApp createStandaloneDeployableApp(String app,
+                                                              Set<SourceDeploymentConfig> sourceDeploymentConfigs) {
+        DeployableSiddhiApp deployableSiddhiApp = new DeployableSiddhiApp(app,
+                siddhiTopologyCreator.isAppStateful(app));
+        if (sourceDeploymentConfigs != null && sourceDeploymentConfigs.size() != 0) {
+            deployableSiddhiApp.setSourceDeploymentConfigs(sourceDeploymentConfigs);
+        }
+        return deployableSiddhiApp;
     }
 
     private List<String> populateAppWithEnvs(Map<String, String> envMap, List<String> siddhiApps) {
@@ -171,8 +182,8 @@ public class SiddhiParserApi {
         return populatedApps;
     }
 
-    private List<SourceDeploymentConfig> getSourceDeploymentConfigs(String siddhiApp) {
-        List<SourceDeploymentConfig> sourceDeploymentConfigs = new ArrayList<>();
+    private Set<SourceDeploymentConfig> getSourceDeploymentConfigs(String siddhiApp) {
+        Set<SourceDeploymentConfig> sourceDeploymentConfigs = new HashSet<>();
         SiddhiAppRuntime siddhiAppRuntime = SiddhiParserDataHolder.getSiddhiManager().createSiddhiAppRuntime(siddhiApp);
         Collection<List<Source>> sources = siddhiAppRuntime.getSources();
         for (List<Source> sourceList : sources) {
